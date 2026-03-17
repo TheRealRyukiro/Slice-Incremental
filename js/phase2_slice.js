@@ -10,9 +10,8 @@ const SLICE_CONFIG = {
   launchInterval: 0.6,
   bombChance:     0.15,
   trailLifetime:  0.2,
-  launchVyMin:    -850,
-  launchVyRange:  -300,
   launchVxRange:  150,
+  apexMargin:     100,    // minimum px from top edge at apex
   fruitGravity:   420,
   halfGravity:    550,
   bombHitstopDuration:  0.5,
@@ -89,7 +88,7 @@ export class Phase2 {
   }
 
   enter(canvas, data) {
-    this.totalToLaunch = data.harvested || 5;
+    this.totalToLaunch = Math.max(data.harvested || 0, 3);
     this.launched = 0;
     this.launchTimer = 0.8;
     this.fruits = [];
@@ -113,6 +112,10 @@ export class Phase2 {
   onPointerDown(x, y) {
     this.isDragging = true;
     this.prevMouse = { x, y };
+    // Check point-hit on tap (no movement yet)
+    if (!this.bombSliced) {
+      this._checkPointSlice(x, y);
+    }
   }
 
   onPointerMove(x, y) {
@@ -147,6 +150,27 @@ export class Phase2 {
         this.slicedCount++;
         this._splitNode(fruit, x1, y1, x2, y2);
         this._spawnSliceParticles(fruit);
+      }
+    }
+  }
+
+  _checkPointSlice(x, y) {
+    for (const fruit of this.fruits) {
+      if (fruit.sliced || fruit.missed || fruit.hidden) continue;
+      const b = fruit.body;
+      const dx = x - b.x;
+      const dy = y - b.y;
+      if (dx * dx + dy * dy < (b.radius + 8) ** 2) {
+        if (fruit.isBomb) {
+          this._triggerBombExplosion(fruit);
+          return;
+        }
+        fruit.sliced = true;
+        this.slicedCount++;
+        // Use a default downward slice direction for tap
+        this._splitNode(fruit, x, y, x, y + 1);
+        this._spawnSliceParticles(fruit);
+        return;
       }
     }
   }
@@ -303,7 +327,19 @@ export class Phase2 {
     const isBomb = Math.random() < SLICE_CONFIG.bombChance;
     const x = w * 0.2 + Math.random() * w * 0.6;
     const vx = (Math.random() - 0.5) * SLICE_CONFIG.launchVxRange;
-    const vy = SLICE_CONFIG.launchVyMin + Math.random() * SLICE_CONFIG.launchVyRange;
+
+    // Compute vy so the apex is exactly apexMargin px below the top edge.
+    // Launch origin is h + 40. Apex target is apexMargin.
+    // Rise distance = (h + 40) - apexMargin.
+    // From v² = 2·g·d → v = sqrt(2·g·d). Negate for upward.
+    const maxRise = (h + 40) - SLICE_CONFIG.apexMargin;
+    const g = SLICE_CONFIG.fruitGravity;
+    const maxVy = -Math.sqrt(2 * g * maxRise);
+
+    // Randomize between 70–100% of max so some fly slightly lower
+    const fraction = 0.7 + Math.random() * 0.3;
+    const vy = maxVy * fraction;
+
     this.fruits.push(new SliceFruit(x, h + 40, vx, vy, isBomb));
     this.launched++;
   }

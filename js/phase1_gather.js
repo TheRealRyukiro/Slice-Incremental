@@ -1,4 +1,4 @@
-// phase1_gather.js — Gathering phase: swipe to detach data nodes from spawner, collect in funnel
+// phase1_gather.js — Gathering phase: swipe to detach data nodes from spawner
 
 import { lineIntersectsCircle } from './physics.js';
 
@@ -10,10 +10,6 @@ const GATHER_CONFIG = {
   appleRadius:    18,
   trailLifetime:  0.2,
   fallGravity:    650,
-  funnelTopWidth:   0.30,
-  funnelBotWidth:   0.08,
-  funnelTopY:       0.78,
-  funnelBotY:       0.92,
   // Visual
   nodeColor:  '#00e5ff',
   nodeGlow:   '#00b8d4',
@@ -58,7 +54,8 @@ export class Phase1 {
     this.trail = [];
     this.cutParticles = [];
     this._spawner = { cx: 0, cy: 0, rx: 0, ry: 0 };
-    this._funnel = { lx1: 0, rx1: 0, lx2: 0, rx2: 0, topY: 0, botY: 0 };
+    this._canvasW = 0;
+    this._canvasH = 0;
   }
 
   enter(canvas) {
@@ -73,24 +70,14 @@ export class Phase1 {
 
     const w = canvas.width;
     const h = canvas.height;
-    const cx = w / 2;
+    this._canvasW = w;
+    this._canvasH = h;
 
     this._spawner = {
-      cx,
+      cx: w / 2,
       cy: h * 0.33,
       rx: w * 0.16,
       ry: h * 0.18,
-    };
-
-    const ftw = w * GATHER_CONFIG.funnelTopWidth;
-    const fbw = w * GATHER_CONFIG.funnelBotWidth;
-    this._funnel = {
-      lx1: cx - ftw / 2,
-      rx1: cx + ftw / 2,
-      lx2: cx - fbw / 2,
-      rx2: cx + fbw / 2,
-      topY: h * GATHER_CONFIG.funnelTopY,
-      botY: h * GATHER_CONFIG.funnelBotY,
     };
 
     for (let i = 0; i < 4; i++) this._spawnNode(true);
@@ -114,6 +101,8 @@ export class Phase1 {
   onPointerDown(x, y) {
     this.isDragging = true;
     this.prevMouse = { x, y };
+    // Check point-hit on tap (no movement yet)
+    this._checkPointCut(x, y);
   }
 
   onPointerMove(x, y) {
@@ -133,19 +122,36 @@ export class Phase1 {
     this.prevMouse = null;
   }
 
+  _checkPointCut(x, y) {
+    for (const n of this.nodes) {
+      if (n.state !== 'tree' || n.scale < 0.8) continue;
+      const dx = x - n.x;
+      const dy = y - n.y;
+      if (dx * dx + dy * dy < (n.radius + 8) ** 2) {
+        this._detachNode(n, 0, 0);
+      }
+    }
+  }
+
   _checkCuts(x1, y1, x2, y2) {
     for (const n of this.nodes) {
       if (n.state !== 'tree' || n.scale < 0.8) continue;
       if (lineIntersectsCircle(x1, y1, x2, y2, n.x, n.y, n.radius)) {
-        n.state = 'falling';
         const sdx = x2 - x1;
         const sdy = y2 - y1;
-        n.vx = sdx * 2 + (Math.random() - 0.5) * 30;
-        n.vy = sdy * 0.5 + 20;
-        n.rotSpeed = (Math.random() - 0.5) * 6;
-        this._spawnCutParticles(n);
+        this._detachNode(n, sdx, sdy);
       }
     }
+  }
+
+  _detachNode(n, sdx, sdy) {
+    n.state = 'falling';
+    n.vx = sdx * 2 + (Math.random() - 0.5) * 30;
+    n.vy = sdy * 0.5 + 20;
+    n.rotSpeed = (Math.random() - 0.5) * 6;
+    // Count as collected immediately on detach
+    this.harvested++;
+    this._spawnCutParticles(n);
   }
 
   _spawnCutParticles(node) {
@@ -162,17 +168,8 @@ export class Phase1 {
     }
   }
 
-  _isInsideFunnel(x, y) {
-    const f = this._funnel;
-    if (y < f.topY || y > f.botY) return false;
-    const t = (y - f.topY) / (f.botY - f.topY);
-    const leftEdge = f.lx1 + (f.lx2 - f.lx1) * t;
-    const rightEdge = f.rx1 + (f.rx2 - f.rx1) * t;
-    return x >= leftEdge && x <= rightEdge;
-  }
 
   update(dt) {
-    const canvasH = this._funnel.botY + 60;
     this.dayTimer -= dt;
 
     this.growthTimer += dt;
@@ -191,18 +188,9 @@ export class Phase1 {
         n.rotation += n.rotSpeed * dt;
         n.vx *= 0.999;
 
-        if (n.y + n.radius >= this._funnel.topY && this._isInsideFunnel(n.x, n.y)) {
-          const f = this._funnel;
-          const centerX = (f.lx1 + f.rx1) / 2;
-          n.vx += (centerX - n.x) * 2 * dt;
-          if (n.y >= f.botY) {
-            n.state = 'collected';
-            this.harvested++;
-          }
-        }
-
-        if (n.y > canvasH + 100 || n.x < -100 || n.x > (this._funnel.rx1 * 2 / GATHER_CONFIG.funnelTopWidth) + 100) {
-          n.state = 'lost';
+        // Off screen — mark done (already counted on detach)
+        if (n.y > this._canvasH + 60 || n.x < -100 || n.x > this._canvasW + 100) {
+          n.state = 'gone';
         }
       }
     }
@@ -235,12 +223,9 @@ export class Phase1 {
     // ── Spawner wireframe ──
     this._drawSpawner(ctx, now);
 
-    // ── Funnel ──
-    this._drawFunnel(ctx);
-
     // ── Data Nodes ──
     for (const n of this.nodes) {
-      if (n.state === 'collected' || n.state === 'lost') continue;
+      if (n.state === 'gone') continue;
       const s = n.scale;
       if (s <= 0) continue;
       ctx.save();
@@ -338,7 +323,7 @@ export class Phase1 {
       const alpha = Math.min(1, (GATHER_CONFIG.dayDuration - this.dayTimer) * 1.5);
       ctx.save();
       ctx.globalAlpha = alpha * (0.4 + 0.4 * Math.sin(now / 300));
-      drawText(ctx, 'SWIPE TO DETACH NODES', w / 2, h - 36,
+      drawText(ctx, 'SWIPE NODES TO COLLECT', w / 2, h - 36,
         `13px ${FONT}`, 'rgba(255,255,255,0.7)');
       ctx.restore();
     }
@@ -401,44 +386,6 @@ export class Phase1 {
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.fillText('SPAWNER', s.cx, s.cy - s.ry * 1.1 - 8);
-
-    ctx.restore();
-  }
-
-  _drawFunnel(ctx) {
-    const f = this._funnel;
-
-    ctx.save();
-    // Wireframe trapezoid
-    ctx.strokeStyle = 'rgba(0,229,255,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(f.lx1, f.topY);
-    ctx.lineTo(f.rx1, f.topY);
-    ctx.lineTo(f.rx2, f.botY);
-    ctx.lineTo(f.lx2, f.botY);
-    ctx.closePath();
-    ctx.stroke();
-
-    // Subtle fill
-    ctx.fillStyle = 'rgba(0,229,255,0.03)';
-    ctx.fill();
-
-    // Dashed guide lines at top
-    ctx.setLineDash([4, 6]);
-    ctx.strokeStyle = 'rgba(0,229,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(f.lx1, f.topY);
-    ctx.lineTo(f.rx1, f.topY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Label
-    ctx.fillStyle = 'rgba(0,229,255,0.25)';
-    ctx.font = `10px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.fillText('COLLECT', (f.lx1 + f.rx1) / 2, f.topY - 6);
 
     ctx.restore();
   }
