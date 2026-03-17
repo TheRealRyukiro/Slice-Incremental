@@ -1,4 +1,6 @@
-// phase1_gather.js — Gathering phase: click/drag over apples on a tree to harvest
+// phase1_gather.js — Gathering phase: swipe to cut apples off the tree, collect in funnel
+
+import { lineIntersectsCircle } from './physics.js';
 
 // ── Tuning knobs (designed for future upgrade-tree attachment) ──
 const GATHER_CONFIG = {
@@ -6,6 +8,14 @@ const GATHER_CONFIG = {
   growthInterval: 1.5,   // seconds between apple spawns
   maxApples:      18,    // tree capacity
   appleRadius:    22,
+  trailLifetime:  0.25,
+  // Falling apple physics
+  fallGravity:    650,
+  // Funnel geometry (fraction of canvas)
+  funnelTopWidth:   0.30,
+  funnelBotWidth:   0.08,
+  funnelTopY:       0.78,
+  funnelBotY:       0.92,
   // Apple color (red only)
   apple: { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
 };
@@ -20,9 +30,13 @@ class Apple {
     this.colorBase = GATHER_CONFIG.apple.base;
     this.colorMid  = GATHER_CONFIG.apple.mid;
     this.colorDark = GATHER_CONFIG.apple.dark;
-    this.harvested = false;
-    this.harvestAnim = 0;
+    // States: 'tree' → 'falling' → 'collected' / 'lost'
+    this.state = 'tree';
     this.scale = 0;       // grows from 0→1 on spawn
+    this.vx = 0;
+    this.vy = 0;
+    this.rotation = 0;
+    this.rotSpeed = 0;
   }
 }
 
@@ -93,11 +107,13 @@ export class Phase1 {
     this.growthTimer = 0;
     this.harvested = 0;
     this.isDragging = false;
+    this.prevMouse = null;
     this.mouseX = 0;
     this.mouseY = 0;
-    this.harvestParticles = [];
-    // Cached canopy bounds for spawning
+    this.trail = [];
+    this.cutParticles = [];
     this._canopy = { cx: 0, cy: 0, rx: 0, ry: 0 };
+    this._funnel = { lx1: 0, rx1: 0, lx2: 0, rx2: 0, topY: 0, botY: 0 };
   }
 
   enter(canvas) {
@@ -106,12 +122,16 @@ export class Phase1 {
     this.growthTimer = 0;
     this.harvested = 0;
     this.isDragging = false;
-    this.harvestParticles = [];
+    this.prevMouse = null;
+    this.trail = [];
+    this.cutParticles = [];
 
-    const cx = canvas.width / 2;
-    const treeTop = canvas.height * 0.12;
-    const treeBottom = canvas.height * 0.55;
-    const treeWidth = canvas.width * 0.35;
+    const w = canvas.width;
+    const h = canvas.height;
+    const cx = w / 2;
+    const treeTop = h * 0.12;
+    const treeBottom = h * 0.55;
+    const treeWidth = w * 0.35;
 
     this._canopy = {
       cx,
@@ -120,16 +140,27 @@ export class Phase1 {
       ry: (treeBottom - treeTop) / 2,
     };
 
-    // Seed some initial apples
-    const startCount = 4;
-    for (let i = 0; i < startCount; i++) {
+    // Precompute funnel geometry
+    const ftw = w * GATHER_CONFIG.funnelTopWidth;
+    const fbw = w * GATHER_CONFIG.funnelBotWidth;
+    this._funnel = {
+      lx1: cx - ftw / 2,
+      rx1: cx + ftw / 2,
+      lx2: cx - fbw / 2,
+      rx2: cx + fbw / 2,
+      topY: h * GATHER_CONFIG.funnelTopY,
+      botY: h * GATHER_CONFIG.funnelBotY,
+    };
+
+    // Seed initial apples
+    for (let i = 0; i < 4; i++) {
       this._spawnApple(true);
     }
   }
 
   _spawnApple(instant) {
-    const living = this.apples.filter(a => !a.harvested).length;
-    if (living >= GATHER_CONFIG.maxApples) return;
+    const onTree = this.apples.filter(a => a.state === 'tree').length;
+    if (onTree >= GATHER_CONFIG.maxApples) return;
 
     const { cx, cy, rx, ry } = this._canopy;
     const angle = Math.random() * Math.PI * 2;
@@ -146,81 +177,131 @@ export class Phase1 {
     this.isDragging = true;
     this.mouseX = x;
     this.mouseY = y;
-    this._tryHarvest(x, y);
+    this.prevMouse = { x, y };
   }
 
   onPointerMove(x, y) {
     this.mouseX = x;
     this.mouseY = y;
-    if (this.isDragging) {
-      this._tryHarvest(x, y);
+    if (this.isDragging && this.prevMouse) {
+      this.trail.push({
+        x1: this.prevMouse.x, y1: this.prevMouse.y,
+        x2: x, y2: y,
+        life: GATHER_CONFIG.trailLifetime,
+      });
+      this._checkSwipeCuts(this.prevMouse.x, this.prevMouse.y, x, y);
     }
+    this.prevMouse = { x, y };
   }
 
   onPointerUp() {
     this.isDragging = false;
+    this.prevMouse = null;
   }
 
-  _tryHarvest(x, y) {
+  _checkSwipeCuts(x1, y1, x2, y2) {
     for (const apple of this.apples) {
-      if (apple.harvested) continue;
-      const dx = x - apple.x;
-      const dy = y - apple.y;
-      if (dx * dx + dy * dy < (apple.radius + 10) ** 2) {
-        apple.harvested = true;
-        this.harvested++;
-        this._spawnParticles(apple);
+      if (apple.state !== 'tree') continue;
+      if (apple.scale < 0.8) continue; // don't cut while still growing
+      if (lineIntersectsCircle(x1, y1, x2, y2, apple.x, apple.y, apple.radius)) {
+        // Cut it free — give it velocity from the swipe direction
+        apple.state = 'falling';
+        const sdx = x2 - x1;
+        const sdy = y2 - y1;
+        apple.vx = sdx * 2 + (Math.random() - 0.5) * 30;
+        apple.vy = sdy * 0.5 + 20; // gentle downward bias
+        apple.rotSpeed = (Math.random() - 0.5) * 6;
+        this._spawnCutParticles(apple);
       }
     }
   }
 
-  _spawnParticles(apple) {
-    for (let i = 0; i < 10; i++) {
-      const angle = (Math.PI * 2 * i) / 10 + Math.random() * 0.4;
-      const speed = 120 + Math.random() * 100;
-      this.harvestParticles.push({
+  _spawnCutParticles(apple) {
+    for (let i = 0; i < 8; i++) {
+      const angle = (Math.PI * 2 * i) / 8 + Math.random() * 0.4;
+      const speed = 80 + Math.random() * 80;
+      this.cutParticles.push({
         x: apple.x, y: apple.y,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 80,
+        vy: Math.sin(angle) * speed - 60,
         life: 1,
-        color: apple.colorBase,
-        radius: 3 + Math.random() * 4,
+        color: '#4caf50', // leaf-green sparks
+        radius: 2 + Math.random() * 3,
       });
     }
   }
 
+  _isInsideFunnel(x, y) {
+    const f = this._funnel;
+    if (y < f.topY || y > f.botY) return false;
+    const t = (y - f.topY) / (f.botY - f.topY);
+    const leftEdge = f.lx1 + (f.lx2 - f.lx1) * t;
+    const rightEdge = f.rx1 + (f.rx2 - f.rx1) * t;
+    return x >= leftEdge && x <= rightEdge;
+  }
+
   update(dt) {
+    const canvasH = this._funnel.botY + 60; // approximate canvas height
+
     // Day timer countdown
     this.dayTimer -= dt;
 
-    // Growth timer — spawn a new apple periodically
+    // Growth timer
     this.growthTimer += dt;
     if (this.growthTimer >= GATHER_CONFIG.growthInterval) {
       this.growthTimer -= GATHER_CONFIG.growthInterval;
       this._spawnApple(false);
     }
 
-    // Animate apple grow-in
+    // Update apples
     for (const a of this.apples) {
-      if (!a.harvested && a.scale < 1) {
-        a.scale = Math.min(1, a.scale + dt * 4);
-      }
-      if (a.harvested) {
-        a.harvestAnim = Math.min(1, a.harvestAnim + dt * 5);
+      if (a.state === 'tree') {
+        if (a.scale < 1) a.scale = Math.min(1, a.scale + dt * 4);
+      } else if (a.state === 'falling') {
+        // Apply gravity
+        a.vy += GATHER_CONFIG.fallGravity * dt;
+        a.x += a.vx * dt;
+        a.y += a.vy * dt;
+        a.rotation += a.rotSpeed * dt;
+        a.vx *= 0.999;
+
+        // Check funnel collection
+        if (a.y + a.radius >= this._funnel.topY && this._isInsideFunnel(a.x, a.y)) {
+          // Guide apple toward funnel center
+          const f = this._funnel;
+          const t = Math.min(1, (a.y - f.topY) / (f.botY - f.topY));
+          const centerX = (f.lx1 + f.rx1) / 2;
+          a.vx += (centerX - a.x) * 2 * dt;
+
+          // Collected when past bottom of funnel
+          if (a.y >= f.botY) {
+            a.state = 'collected';
+            this.harvested++;
+          }
+        }
+
+        // Lost if off screen
+        if (a.y > canvasH + 100 || a.x < -100 || a.x > (this._funnel.rx1 * 2 / GATHER_CONFIG.funnelTopWidth) + 100) {
+          a.state = 'lost';
+        }
       }
     }
 
-    // Prune fully-animated harvested apples
-    this.apples = this.apples.filter(a => a.harvestAnim < 1 || !a.harvested);
+    // Prune collected/lost apples
+    this.apples = this.apples.filter(a => a.state === 'tree' || a.state === 'falling');
 
-    // Update particles
-    for (const p of this.harvestParticles) {
+    // Trail
+    for (const t of this.trail) t.life -= dt;
+    this.trail = this.trail.filter(t => t.life > 0);
+
+    // Cut particles
+    for (const p of this.cutParticles) {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.vy += 400 * dt;
-      p.life -= dt * 2;
+      p.life -= dt * 2.5;
     }
-    this.harvestParticles = this.harvestParticles.filter(p => p.life > 0);
+    this.cutParticles = this.cutParticles.filter(p => p.life > 0);
 
     return this.dayTimer <= 0 ? 'done' : null;
   }
@@ -301,26 +382,69 @@ export class Phase1 {
     drawCanopyBlob(canopyCX, canopyCY - canopyRY * 0.25,
       canopyRX * 0.65, canopyRY * 0.6, '#34d67a', '#1a6b3a');
 
-    // Apples
+    // ── Funnel ──
+    this._drawFunnel(ctx, w, h);
+
+    // Apples (both on-tree and falling)
     for (const a of this.apples) {
-      if (a.harvestAnim >= 1) continue;
-      const s = a.harvested ? (1 - a.harvestAnim) * a.scale : a.scale;
+      if (a.state === 'collected' || a.state === 'lost') continue;
+      const s = a.scale;
       if (s <= 0) continue;
       ctx.save();
       ctx.translate(a.x, a.y);
+      ctx.rotate(a.rotation);
       ctx.scale(s, s);
-      ctx.globalAlpha = a.harvested ? 1 - a.harvestAnim : 1;
       drawVolumetricFruit(ctx, 0, 0, a.radius, a.colorBase, a.colorMid, a.colorDark);
+      ctx.restore();
+    }
+
+    // ── Blade trail ──
+    if (this.trail.length > 0) {
+      ctx.save();
+      ctx.shadowColor = '#00e5ff';
+      ctx.shadowBlur = 18;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      for (const t of this.trail) {
+        const alpha = t.life / GATHER_CONFIG.trailLifetime;
+        const thickness = alpha * 8 + 2;
+        const dx = t.x2 - t.x1;
+        const dy = t.y2 - t.y1;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const headW = thickness;
+        const tailW = thickness * 0.15;
+
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillStyle = `rgba(200,250,255,${alpha * 0.85})`;
+        ctx.beginPath();
+        ctx.moveTo(t.x1 + nx * tailW, t.y1 + ny * tailW);
+        ctx.lineTo(t.x2 + nx * headW, t.y2 + ny * headW);
+        ctx.lineTo(t.x2 - nx * headW, t.y2 - ny * headW);
+        ctx.lineTo(t.x1 - nx * tailW, t.y1 - ny * tailW);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.globalAlpha = alpha * 0.7;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(t.x1, t.y1);
+        ctx.lineTo(t.x2, t.y2);
+        ctx.stroke();
+      }
       ctx.globalAlpha = 1;
       ctx.restore();
     }
 
-    // Harvest particles
+    // Cut particles
     ctx.save();
-    for (const p of this.harvestParticles) {
+    for (const p of this.cutParticles) {
       ctx.globalAlpha = p.life;
       ctx.shadowColor = p.color;
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 6;
       ctx.fillStyle = p.color;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius * p.life, 0, Math.PI * 2);
@@ -329,17 +453,14 @@ export class Phase1 {
     ctx.restore();
 
     // ── HUD ──
-
-    // Day Timer (top center)
     const dayLeft = Math.max(0, this.dayTimer);
     drawShadowedText(ctx, 'Day: ' + dayLeft.toFixed(1) + 's', w / 2, 52,
       `bold 38px ${FONT_MAIN}`, '#fff');
 
-    // Harvest count
-    drawShadowedText(ctx, 'Harvested: ' + this.harvested, w / 2, 88,
+    drawShadowedText(ctx, 'Collected: ' + this.harvested, w / 2, 88,
       `bold 24px ${FONT_MAIN}`, '#ffd700');
 
-    // Growth timer bar (small, below harvest count)
+    // Growth timer bar
     const growPct = this.growthTimer / GATHER_CONFIG.growthInterval;
     const barW = 120;
     const barH = 6;
@@ -355,10 +476,69 @@ export class Phase1 {
       const alpha = Math.min(1, (GATHER_CONFIG.dayDuration - this.dayTimer) * 2);
       ctx.save();
       ctx.globalAlpha = alpha * (0.5 + 0.5 * Math.sin(Date.now() / 300));
-      drawShadowedText(ctx, 'Click & drag to harvest!', w / 2, h - 40,
+      drawShadowedText(ctx, 'Swipe to cut apples into the funnel!', w / 2, h - 40,
         `20px ${FONT_MAIN}`, '#fff');
       ctx.restore();
     }
+  }
+
+  _drawFunnel(ctx, w, h) {
+    const f = this._funnel;
+
+    // Metallic funnel body
+    ctx.save();
+    const funnelGrad = ctx.createLinearGradient(f.lx1, f.topY, f.rx1, f.topY);
+    funnelGrad.addColorStop(0, '#3a3a3a');
+    funnelGrad.addColorStop(0.15, '#6a6a6a');
+    funnelGrad.addColorStop(0.3, '#888');
+    funnelGrad.addColorStop(0.5, '#aaa');
+    funnelGrad.addColorStop(0.7, '#888');
+    funnelGrad.addColorStop(0.85, '#6a6a6a');
+    funnelGrad.addColorStop(1, '#3a3a3a');
+    ctx.fillStyle = funnelGrad;
+
+    ctx.beginPath();
+    ctx.moveTo(f.lx1, f.topY);
+    ctx.lineTo(f.rx1, f.topY);
+    ctx.lineTo(f.rx2, f.botY);
+    ctx.lineTo(f.lx2, f.botY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Rim highlight
+    ctx.strokeStyle = 'rgba(200,200,220,0.6)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(f.lx1, f.topY);
+    ctx.lineTo(f.rx1, f.topY);
+    ctx.stroke();
+
+    // Inner shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.moveTo(f.lx1 + 6, f.topY + 4);
+    ctx.lineTo(f.rx1 - 6, f.topY + 4);
+    ctx.lineTo(f.rx2, f.botY);
+    ctx.lineTo(f.lx2, f.botY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bolts / rivets (decorative)
+    const rivetY = f.topY + 8;
+    for (let i = 0; i < 4; i++) {
+      const rx = f.lx1 + (f.rx1 - f.lx1) * ((i + 0.5) / 4);
+      ctx.fillStyle = '#555';
+      ctx.beginPath();
+      ctx.arc(rx, rivetY, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.beginPath();
+      ctx.arc(rx - 0.5, rivetY - 0.5, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 
   getResult() {

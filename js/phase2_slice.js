@@ -11,12 +11,18 @@ const SLICE_CONFIG = {
   bombChance:     0.15,
   trailLifetime:  0.25,
   // Launch physics
-  launchVyMin:    -850,   // stronger upward kick
-  launchVyRange:  -300,   // additional random upward
-  launchVxRange:  150,    // horizontal spread
+  launchVyMin:    -850,
+  launchVyRange:  -300,
+  launchVxRange:  150,
   // In-flight physics
-  fruitGravity:   420,    // lower gravity → more hang time
+  fruitGravity:   420,
   halfGravity:    550,
+  // Bomb explosion
+  bombHitstopDuration:  0.5,   // seconds fruits freeze
+  bombTransitionDelay:  1.0,   // seconds before moving to Phase 3
+  bombParticleCount:    35,
+  bombShakeDuration:    0.4,
+  bombShakeIntensity:   12,
   // Apple color (red only)
   apple: { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
 };
@@ -42,6 +48,7 @@ class SliceFruit {
     }
     this.sliced = false;
     this.missed = false;
+    this.hidden = false;  // for bomb hide on explosion
     this.rotation = 0;
     this.rotSpeed = (Math.random() - 0.5) * 4;
   }
@@ -118,7 +125,6 @@ function drawVolumetricFruit(ctx, r, base, mid, dark) {
 }
 
 function drawBomb(ctx, r, time) {
-  // Metallic radial gradient body
   const grad = ctx.createRadialGradient(
     -r * 0.25, -r * 0.25, r * 0.1,
     0, 0, r
@@ -133,14 +139,12 @@ function drawBomb(ctx, r, time) {
   ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
 
-  // Metallic rim highlight
   ctx.strokeStyle = 'rgba(150,160,180,0.3)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.arc(0, 0, r - 1, -Math.PI * 0.7, -Math.PI * 0.2);
   ctx.stroke();
 
-  // Glowing red core
   const coreGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.45);
   const pulse = 0.4 + 0.3 * Math.sin(time / 100);
   coreGrad.addColorStop(0, `rgba(255,60,30,${pulse})`);
@@ -150,7 +154,6 @@ function drawBomb(ctx, r, time) {
   ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
   ctx.fill();
 
-  // Fuse
   ctx.strokeStyle = '#8d6e63';
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
@@ -159,7 +162,6 @@ function drawBomb(ctx, r, time) {
   ctx.quadraticCurveTo(6, -r - 8, 3, -r - 16);
   ctx.stroke();
 
-  // Sparking fuse tip
   ctx.save();
   ctx.shadowColor = '#ffab00';
   ctx.shadowBlur = 12;
@@ -168,14 +170,12 @@ function drawBomb(ctx, r, time) {
   ctx.beginPath();
   ctx.arc(3, -r - 16, 5, 0, Math.PI * 2);
   ctx.fill();
-  // Secondary spark
   ctx.fillStyle = `rgba(255,255,200,${sparkPulse * 0.8})`;
   ctx.beginPath();
   ctx.arc(3, -r - 16, 2.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // Skull icon — simple X marks
   ctx.strokeStyle = `rgba(200,50,50,${0.5 + 0.2 * Math.sin(time / 150)})`;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
@@ -212,9 +212,14 @@ export class Phase2 {
     this.mouseY = 0;
     this.bombSliced = false;
     this.slicedCount = 0;
-    this.flashTimer = 0;
     this.sliceFlashes = [];
-    this.bombFlash = 0;
+    // Bomb explosion state
+    this.explosionParticles = [];
+    this.hitstopTimer = 0;
+    this.transitionTimer = 0;
+    this.shakeTimer = 0;
+    this.shakeOffsetX = 0;
+    this.shakeOffsetY = 0;
   }
 
   enter(canvas, data) {
@@ -230,7 +235,12 @@ export class Phase2 {
     this.bombSliced = false;
     this.slicedCount = 0;
     this.sliceFlashes = [];
-    this.bombFlash = 0;
+    this.explosionParticles = [];
+    this.hitstopTimer = 0;
+    this.transitionTimer = 0;
+    this.shakeTimer = 0;
+    this.shakeOffsetX = 0;
+    this.shakeOffsetY = 0;
     this.canvas = canvas;
   }
 
@@ -250,7 +260,9 @@ export class Phase2 {
         x2: x, y2: y,
         life: SLICE_CONFIG.trailLifetime,
       });
-      this._checkSlices(this.prevMouse.x, this.prevMouse.y, x, y);
+      if (!this.bombSliced) {
+        this._checkSlices(this.prevMouse.x, this.prevMouse.y, x, y);
+      }
     }
     this.prevMouse = { x, y };
   }
@@ -262,12 +274,11 @@ export class Phase2 {
 
   _checkSlices(x1, y1, x2, y2) {
     for (const fruit of this.fruits) {
-      if (fruit.sliced || fruit.missed) continue;
+      if (fruit.sliced || fruit.missed || fruit.hidden) continue;
       const b = fruit.body;
       if (lineIntersectsCircle(x1, y1, x2, y2, b.x, b.y, b.radius)) {
         if (fruit.isBomb) {
-          this.bombSliced = true;
-          this.bombFlash = 0.5;
+          this._triggerBombExplosion(fruit);
           return;
         }
         fruit.sliced = true;
@@ -275,6 +286,34 @@ export class Phase2 {
         this._splitFruit(fruit, x1, y1, x2, y2);
         this._spawnJuice(fruit);
       }
+    }
+  }
+
+  _triggerBombExplosion(bomb) {
+    const b = bomb.body;
+    bomb.hidden = true;
+    bomb.sliced = true;
+    this.bombSliced = true;
+
+    // Start hitstop (freeze)
+    this.hitstopTimer = SLICE_CONFIG.bombHitstopDuration;
+    this.transitionTimer = SLICE_CONFIG.bombTransitionDelay;
+    this.shakeTimer = SLICE_CONFIG.bombShakeDuration;
+
+    // Spawn explosion particles
+    const count = SLICE_CONFIG.bombParticleCount;
+    const colors = ['#ff9800', '#ff5722', '#ffeb3b', '#ffc107', '#ff6f00', '#fff176'];
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
+      const speed = 200 + Math.random() * 400;
+      this.explosionParticles.push({
+        x: b.x, y: b.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 150,
+        life: 1,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        radius: 3 + Math.random() * 7,
+      });
     }
   }
 
@@ -320,6 +359,45 @@ export class Phase2 {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
+    // ── Bomb explosion sequencing ──
+    if (this.bombSliced) {
+      // Screen shake
+      if (this.shakeTimer > 0) {
+        this.shakeTimer -= dt;
+        const intensity = SLICE_CONFIG.bombShakeIntensity * (this.shakeTimer / SLICE_CONFIG.bombShakeDuration);
+        this.shakeOffsetX = (Math.random() - 0.5) * 2 * intensity;
+        this.shakeOffsetY = (Math.random() - 0.5) * 2 * intensity;
+      } else {
+        this.shakeOffsetX = 0;
+        this.shakeOffsetY = 0;
+      }
+
+      // Hitstop countdown (fruits frozen during this)
+      if (this.hitstopTimer > 0) {
+        this.hitstopTimer -= dt;
+      }
+
+      // Explosion particles always update
+      for (const p of this.explosionParticles) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 500 * dt;
+        p.life -= dt * 1.2;
+      }
+      this.explosionParticles = this.explosionParticles.filter(p => p.life > 0);
+
+      // Transition delay
+      this.transitionTimer -= dt;
+      if (this.transitionTimer <= 0) return 'done';
+
+      // During hitstop, skip fruit physics but still update trail/juice
+      if (this.hitstopTimer > 0) {
+        this._updateTrailAndJuice(dt);
+        return null;
+      }
+    }
+
+    // ── Normal phase logic ──
     this.launchTimer -= dt;
     if (this.launchTimer <= 0 && this.launched < this.totalToLaunch && this._activeFruitCount() < SLICE_CONFIG.maxOnScreen) {
       this._launchFruit(w, h);
@@ -341,32 +419,31 @@ export class Phase2 {
     }
     this.halves = this.halves.filter(h => h.fadeTimer > 0 && !h.body.isOffScreen(w, this.canvas.height));
 
-    for (const t of this.trail) {
-      t.life -= dt;
-    }
-    this.trail = this.trail.filter(t => t.life > 0);
-
-    // Juice particles
-    for (const p of this.juiceParticles) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 500 * dt; // gravity
-      p.life -= dt * 1.8;
-    }
-    this.juiceParticles = this.juiceParticles.filter(p => p.life > 0);
+    this._updateTrailAndJuice(dt);
 
     for (const f of this.sliceFlashes) {
       f.life -= dt;
     }
     this.sliceFlashes = this.sliceFlashes.filter(f => f.life > 0);
-    if (this.bombFlash > 0) this.bombFlash -= dt;
 
-    if (this.bombSliced && this.bombFlash <= 0) return 'done';
     const allLaunched = this.launched >= this.totalToLaunch;
     const allResolved = this.fruits.every(f => f.sliced || f.missed);
     if (allLaunched && allResolved) return 'done';
 
     return null;
+  }
+
+  _updateTrailAndJuice(dt) {
+    for (const t of this.trail) t.life -= dt;
+    this.trail = this.trail.filter(t => t.life > 0);
+
+    for (const p of this.juiceParticles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 500 * dt;
+      p.life -= dt * 1.8;
+    }
+    this.juiceParticles = this.juiceParticles.filter(p => p.life > 0);
   }
 
   _launchFruit(w, h) {
@@ -383,22 +460,21 @@ export class Phase2 {
     const h = canvas.height;
     const now = Date.now();
 
-    // Background — deep midnight gradient
+    // Apply screen shake
+    ctx.save();
+    if (this.shakeTimer > 0) {
+      ctx.translate(this.shakeOffsetX, this.shakeOffsetY);
+    }
+
+    // Background
     const bg = ctx.createLinearGradient(0, 0, 0, h);
     bg.addColorStop(0, '#0b0e17');
     bg.addColorStop(0.5, '#101828');
     bg.addColorStop(1, '#162038');
     ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-
-    // Bomb flash overlay
-    if (this.bombFlash > 0) {
-      ctx.fillStyle = `rgba(255, 40, 30, ${this.bombFlash * 0.6})`;
-      ctx.fillRect(0, 0, w, h);
-    }
+    ctx.fillRect(-20, -20, w + 40, h + 40); // oversized to cover shake
 
     // --- Blade trail ---
-    // Build a tapered, glowing polygon from recent trail segments
     if (this.trail.length > 0) {
       ctx.save();
       ctx.shadowColor = '#00e5ff';
@@ -408,16 +484,12 @@ export class Phase2 {
 
       for (const t of this.trail) {
         const alpha = t.life / SLICE_CONFIG.trailLifetime;
-        // Thick at head, taper to thin
         const thickness = alpha * 8 + 2;
-
-        // Compute perpendicular offset for tapering polygon
         const dx = t.x2 - t.x1;
         const dy = t.y2 - t.y1;
         const len = Math.sqrt(dx * dx + dy * dy) || 1;
         const nx = -dy / len;
         const ny = dx / len;
-
         const headW = thickness;
         const tailW = thickness * 0.15;
 
@@ -431,7 +503,6 @@ export class Phase2 {
         ctx.closePath();
         ctx.fill();
 
-        // Inner bright core
         ctx.globalAlpha = alpha * 0.7;
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 1.5;
@@ -440,7 +511,6 @@ export class Phase2 {
         ctx.lineTo(t.x2, t.y2);
         ctx.stroke();
       }
-
       ctx.globalAlpha = 1;
       ctx.restore();
     }
@@ -473,7 +543,7 @@ export class Phase2 {
 
     // Fruits
     for (const fruit of this.fruits) {
-      if (fruit.sliced || fruit.missed) continue;
+      if (fruit.sliced || fruit.missed || fruit.hidden) continue;
       const b = fruit.body;
       ctx.save();
       ctx.translate(b.x, b.y);
@@ -487,7 +557,7 @@ export class Phase2 {
       ctx.restore();
     }
 
-    // Fruit halves — with gradient
+    // Fruit halves
     for (const half of this.halves) {
       const b = half.body;
       const alpha = Math.min(1, half.fadeTimer);
@@ -496,7 +566,6 @@ export class Phase2 {
       ctx.rotate(half.angle);
       ctx.globalAlpha = alpha;
 
-      // Half-circle with gradient
       const hg = ctx.createRadialGradient(-b.radius * 0.2, 0, 0, 0, 0, b.radius);
       hg.addColorStop(0, half.color);
       hg.addColorStop(1, half.colorMid);
@@ -506,16 +575,31 @@ export class Phase2 {
       ctx.closePath();
       ctx.fill();
 
-      // Flesh interior on flat edge
       ctx.fillStyle = 'rgba(255,255,230,0.25)';
       ctx.fillRect(-1, -b.radius, 3, b.radius * 2);
       ctx.globalAlpha = 1;
       ctx.restore();
     }
 
+    // ── Explosion particles ──
+    ctx.save();
+    for (const p of this.explosionParticles) {
+      ctx.globalAlpha = p.life;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * Math.max(0.3, p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
     // HUD
     drawShadowedText(ctx, `Sliced: ${this.slicedCount} / ${this.totalToLaunch}`,
       w / 2, 42, `bold 28px ${FONT_MAIN}`, '#fff');
+
+    // End shake transform
+    ctx.restore();
   }
 
   getResult() {

@@ -5,15 +5,17 @@ import { Body, resolveCircleCollision } from './physics.js';
 // ── Tuning knobs (designed for future upgrade-tree attachment) ──
 const PLINKO_CONFIG = {
   pegRadius:    6,
-  halfRadius:   16,    // was 10 → +60 % for visual weight & peg interaction
+  halfRadius:   24,    // was 16 → another +50 % for visual weight
   pegRows:      8,
   pegCols:      9,
   dropInterval: 0.3,
   binScores:    [1, 3, 5, 10, 25, 10, 5, 3, 1, 1],
   // Board bounding box (fraction of viewport)
-  boardWidthPct:  0.55,  // was 0.8 → much tighter
-  boardHeightPct: 0.55,  // was 0.7 → shorter
-  boardTopPct:    0.12,  // push down slightly
+  boardWidthPct:  0.55,
+  boardHeightPct: 0.55,
+  boardTopPct:    0.12,
+  // Apple color for slice rendering
+  apple: { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
 };
 const BIN_COUNT = PLINKO_CONFIG.pegCols + 1;
 
@@ -54,6 +56,70 @@ function drawShadowedText(ctx, text, x, y, font, fillColor) {
   ctx.fillStyle = fillColor;
   ctx.fillText(text, x, y);
   ctx.restore();
+}
+
+// Draw a proper apple-half slice with radial gradient, flat edge, and seed
+function drawAppleSlice(ctx, r) {
+  const { base, mid, dark } = PLINKO_CONFIG.apple;
+
+  // Outer skin — semi-circle with red radial gradient
+  const skinGrad = ctx.createRadialGradient(-r * 0.2, 0, r * 0.1, 0, 0, r);
+  skinGrad.addColorStop(0, '#fff');
+  skinGrad.addColorStop(0.12, base);
+  skinGrad.addColorStop(0.55, mid);
+  skinGrad.addColorStop(1, dark);
+  ctx.fillStyle = skinGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Flat edge (flesh) — light creamy color
+  ctx.fillStyle = '#ffecd2';
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.lineTo(0, r);
+  ctx.lineTo(-3, r);
+  ctx.lineTo(-3, -r);
+  ctx.closePath();
+  ctx.fill();
+
+  // Flesh gradient on flat side
+  const fleshGrad = ctx.createLinearGradient(0, 0, -r * 0.35, 0);
+  fleshGrad.addColorStop(0, 'rgba(255,236,210,0.7)');
+  fleshGrad.addColorStop(1, 'rgba(255,236,210,0)');
+  ctx.fillStyle = fleshGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.92, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(0, r);
+  ctx.lineTo(0, -r);
+  ctx.closePath();
+  ctx.fill();
+
+  // Seed — small dark teardrop in the center
+  ctx.save();
+  ctx.fillStyle = '#4e2a04';
+  ctx.beginPath();
+  ctx.ellipse(r * 0.2, 0, r * 0.08, r * 0.16, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // Seed highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(r * 0.18, -r * 0.04, r * 0.03, r * 0.06, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Specular highlight on skin
+  const specGrad = ctx.createRadialGradient(
+    r * 0.15, -r * 0.3, 0,
+    r * 0.15, -r * 0.3, r * 0.35
+  );
+  specGrad.addColorStop(0, 'rgba(255,255,255,0.5)');
+  specGrad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = specGrad;
+  ctx.beginPath();
+  ctx.arc(r * 0.15, -r * 0.3, r * 0.35, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 export class Phase3 {
@@ -147,26 +213,33 @@ export class Phase3 {
     }
 
     for (const piece of this.pieces) {
-      if (piece.scored) continue;
+      if (piece.scored && piece.body.y > h + 100) continue; // off-screen, skip physics
       const b = piece.body;
       b.update(dt);
       piece.rotation += piece.rotSpeed * dt;
 
-      for (const peg of this.pegs) {
-        resolveCircleCollision(b, peg);
+      // Peg collisions (only above the bin line)
+      if (!piece.scored) {
+        for (const peg of this.pegs) {
+          resolveCircleCollision(b, peg);
+        }
       }
 
-      if (b.x - b.radius < this.boardLeft) {
-        b.x = this.boardLeft + b.radius;
-        b.vx = Math.abs(b.vx) * 0.5;
-      }
-      if (b.x + b.radius > this.boardLeft + this.boardWidth) {
-        b.x = this.boardLeft + this.boardWidth - b.radius;
-        b.vx = -Math.abs(b.vx) * 0.5;
+      // Side-wall containment (only while in the board zone)
+      if (!piece.scored) {
+        if (b.x - b.radius < this.boardLeft) {
+          b.x = this.boardLeft + b.radius;
+          b.vx = Math.abs(b.vx) * 0.5;
+        }
+        if (b.x + b.radius > this.boardLeft + this.boardWidth) {
+          b.x = this.boardLeft + this.boardWidth - b.radius;
+          b.vx = -Math.abs(b.vx) * 0.5;
+        }
       }
 
+      // ── Bin trigger zone (transparent — score but keep falling) ──
       const binTop = this.boardTop + this.boardHeight;
-      if (b.y + b.radius >= binTop) {
+      if (!piece.scored && b.y >= binTop) {
         const relX = b.x - this.boardLeft;
         const binIdx = Math.floor(relX / (this.boardWidth / BIN_COUNT));
         const clampedIdx = Math.max(0, Math.min(BIN_COUNT - 1, binIdx));
@@ -182,11 +255,12 @@ export class Phase3 {
           text: '+' + pts,
           life: 1.0,
         });
-        b.vy = 0;
-        b.vx = 0;
-        b.y = binTop + 5;
+        // Do NOT stop the piece — let it fall through
       }
     }
+
+    // Prune pieces that have fallen well off the bottom
+    this.pieces = this.pieces.filter(p => p.body.y < h + 200);
 
     for (const bin of this.bins) {
       if (bin.flash > 0) bin.flash -= dt;
@@ -198,8 +272,9 @@ export class Phase3 {
     }
     this.scorePopups = this.scorePopups.filter(p => p.life > 0);
 
-    if (this.toDrop.length === 0) {
-      const allScored = this.pieces.length > 0 && this.pieces.every(p => p.scored);
+    // Done when all dropped and all scored or off-screen
+    if (this.toDrop.length === 0 && this.pieces.length > 0) {
+      const allScored = this.pieces.every(p => p.scored);
       if (allScored) {
         this.settleTimer += dt;
         if (this.settleTimer > 1.5) return 'done';
@@ -218,7 +293,7 @@ export class Phase3 {
     const w = canvas.width;
     const h = canvas.height;
 
-    // Background — deep gradient
+    // Background
     const bg = ctx.createLinearGradient(0, 0, 0, h);
     bg.addColorStop(0, '#070b14');
     bg.addColorStop(0.4, '#0d1528');
@@ -226,11 +301,11 @@ export class Phase3 {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
-    // Board background — subtle
+    // Board background
     ctx.fillStyle = 'rgba(255,255,255,0.02)';
     ctx.fillRect(this.boardLeft, this.boardTop, this.boardWidth, this.boardHeight);
 
-    // Board side walls — neon lines
+    // Board side walls
     ctx.save();
     ctx.strokeStyle = 'rgba(0,229,255,0.15)';
     ctx.shadowColor = PEG_GLOW_COLOR;
@@ -244,14 +319,12 @@ export class Phase3 {
     ctx.stroke();
     ctx.restore();
 
-    // Pegs — neon glowing dots
+    // Pegs
     ctx.save();
     for (const peg of this.pegs) {
-      // Outer glow
       ctx.shadowColor = PEG_GLOW_COLOR;
       ctx.shadowBlur = 12;
 
-      // Glow halo
       const glow = ctx.createRadialGradient(peg.x, peg.y, 0, peg.x, peg.y, peg.radius * 2.5);
       glow.addColorStop(0, 'rgba(0,229,255,0.25)');
       glow.addColorStop(1, 'rgba(0,229,255,0)');
@@ -260,7 +333,6 @@ export class Phase3 {
       ctx.arc(peg.x, peg.y, peg.radius * 2.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Solid peg
       const pegGrad = ctx.createRadialGradient(
         peg.x - 1.5, peg.y - 1.5, 0,
         peg.x, peg.y, peg.radius
@@ -275,7 +347,7 @@ export class Phase3 {
     }
     ctx.restore();
 
-    // Bins — sleek semi-transparent with glowing borders
+    // ── Bins — transparent trigger zones ──
     const binWidth = this.boardWidth / BIN_COUNT;
     const binTop = this.boardTop + this.boardHeight;
     for (let i = 0; i < this.bins.length; i++) {
@@ -283,33 +355,32 @@ export class Phase3 {
       const bx = this.boardLeft + binWidth * i;
       const glowColor = BIN_GLOW_COLORS[i] || '#546e7a';
 
-      // Bin fill — semi-transparent gradient
-      const binGrad = ctx.createLinearGradient(bx, binTop, bx, binTop + bin.height);
-      const flashBoost = bin.flash > 0 ? bin.flash * 0.3 : 0;
-      binGrad.addColorStop(0, `rgba(255,255,255,${0.06 + flashBoost})`);
-      binGrad.addColorStop(1, `rgba(255,255,255,${0.02 + flashBoost * 0.5})`);
-      ctx.fillStyle = binGrad;
-      ctx.fillRect(bx + 1, binTop, binWidth - 2, bin.height);
+      // Subtle transparent fill (no solid wall)
+      const flashBoost = bin.flash > 0 ? bin.flash * 0.4 : 0;
+      ctx.fillStyle = `rgba(255,255,255,${0.03 + flashBoost})`;
+      ctx.fillRect(bx + 1, binTop, binWidth - 2, 30);
 
-      // Glowing top border
+      // Glowing trigger line at the bin threshold
       ctx.save();
       ctx.shadowColor = glowColor;
-      ctx.shadowBlur = bin.flash > 0 ? 16 : 6;
+      ctx.shadowBlur = bin.flash > 0 ? 18 : 6;
       ctx.strokeStyle = glowColor;
-      ctx.globalAlpha = 0.5 + (bin.flash > 0 ? bin.flash : 0);
+      ctx.globalAlpha = 0.4 + (bin.flash > 0 ? bin.flash : 0);
       ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(bx + 1, binTop);
       ctx.lineTo(bx + binWidth - 1, binTop);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.restore();
 
-      // Bin dividers
+      // Dividers
       ctx.fillStyle = 'rgba(0,229,255,0.12)';
-      ctx.fillRect(bx, binTop, 1.5, bin.height);
+      ctx.fillRect(bx, binTop, 1.5, 30);
 
       // Score label
-      drawShadowedText(ctx, 'x' + bin.score, bx + binWidth / 2, binTop + bin.height - 8,
+      drawShadowedText(ctx, 'x' + bin.score, bx + binWidth / 2, binTop + 22,
         `bold 14px ${FONT_MAIN}`, glowColor);
 
       // Piece count
@@ -318,37 +389,32 @@ export class Phase3 {
         ctx.font = `12px ${FONT_MAIN}`;
         ctx.textAlign = 'center';
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText(bin.count.toString(), bx + binWidth / 2, binTop + 18);
+        ctx.fillText(bin.count.toString(), bx + binWidth / 2, binTop + 36);
         ctx.restore();
       }
     }
 
-    // Pieces — with gradient
+    // ── Pieces — proper apple-slice rendering ──
     for (const piece of this.pieces) {
       const b = piece.body;
+      if (b.y > h + 100) continue; // off-screen
       ctx.save();
       ctx.translate(b.x, b.y);
       ctx.rotate(piece.rotation);
-      ctx.globalAlpha = piece.scored ? 0.35 : 1;
 
-      // Half-circle with radial gradient
-      const pg = ctx.createRadialGradient(-b.radius * 0.2, 0, 0, 0, 0, b.radius);
-      pg.addColorStop(0, piece.color);
-      pg.addColorStop(1, 'rgba(0,0,0,0.3)');
-      ctx.fillStyle = pg;
-      ctx.beginPath();
-      ctx.arc(0, 0, b.radius, -Math.PI / 2, Math.PI / 2);
-      ctx.closePath();
-      ctx.fill();
+      // Fade slightly once scored (falling away)
+      if (piece.scored) {
+        const fadeProgress = Math.min(1, (b.y - (this.boardTop + this.boardHeight)) / 150);
+        ctx.globalAlpha = Math.max(0, 1 - fadeProgress * 0.7);
+      }
 
-      // Flesh interior edge
-      ctx.fillStyle = 'rgba(255,255,230,0.2)';
-      ctx.fillRect(-1, -b.radius, 2, b.radius * 2);
+      drawAppleSlice(ctx, b.radius);
+
       ctx.globalAlpha = 1;
       ctx.restore();
     }
 
-    // Score popups — glowing gold
+    // Score popups
     ctx.save();
     for (const p of this.scorePopups) {
       ctx.globalAlpha = p.life;
