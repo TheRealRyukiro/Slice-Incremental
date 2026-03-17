@@ -1,32 +1,26 @@
-// phase3_plinko.js — Plinko phase: drop fruit halves through a pegboard into scoring bins
+// phase3_plinko.js — Plinko phase: drop node halves through a pegboard
 
 import { Body, resolveCircleCollision } from './physics.js';
 
 // ── Tuning knobs (designed for future upgrade-tree attachment) ──
 const PLINKO_CONFIG = {
-  pegRadius:    6,
-  halfRadius:   24,    // was 16 → another +50 % for visual weight
+  pegRadius:    5,
+  halfRadius:   24,
   pegRows:      8,
   pegCols:      9,
   dropInterval: 0.3,
   binScores:    [1, 3, 5, 10, 25, 10, 5, 3, 1, 1],
-  // Board bounding box (fraction of viewport)
   boardWidthPct:  0.55,
   boardHeightPct: 0.55,
   boardTopPct:    0.12,
-  // Apple color for slice rendering
-  apple: { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
+  // Visual
+  nodeColor: '#00e5ff',
+  binHeight: 40,
 };
 const BIN_COUNT = PLINKO_CONFIG.pegCols + 1;
 
-const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
-
-// Neon color palette for pegs
-const PEG_GLOW_COLOR = '#00e5ff';
-const BIN_GLOW_COLORS = [
-  '#546e7a', '#42a5f5', '#29b6f6', '#26c6da',
-  '#ffd740', '#26c6da', '#29b6f6', '#42a5f5', '#546e7a', '#546e7a',
-];
+const BG = '#0D1117';
+const FONT = '"SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace';
 
 class PlinkoHalf {
   constructor(x, y, color) {
@@ -45,81 +39,13 @@ class PlinkoHalf {
   }
 }
 
-function drawShadowedText(ctx, text, x, y, font, fillColor) {
+function drawText(ctx, text, x, y, font, color) {
   ctx.save();
   ctx.font = font;
   ctx.textAlign = 'center';
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = 6;
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 2;
-  ctx.fillStyle = fillColor;
+  ctx.fillStyle = color;
   ctx.fillText(text, x, y);
   ctx.restore();
-}
-
-// Draw a proper apple-half slice with radial gradient, flat edge, and seed
-function drawAppleSlice(ctx, r) {
-  const { base, mid, dark } = PLINKO_CONFIG.apple;
-
-  // Outer skin — semi-circle with red radial gradient
-  const skinGrad = ctx.createRadialGradient(-r * 0.2, 0, r * 0.1, 0, 0, r);
-  skinGrad.addColorStop(0, '#fff');
-  skinGrad.addColorStop(0.12, base);
-  skinGrad.addColorStop(0.55, mid);
-  skinGrad.addColorStop(1, dark);
-  ctx.fillStyle = skinGrad;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2);
-  ctx.closePath();
-  ctx.fill();
-
-  // Flat edge (flesh) — light creamy color
-  ctx.fillStyle = '#ffecd2';
-  ctx.beginPath();
-  ctx.moveTo(0, -r);
-  ctx.lineTo(0, r);
-  ctx.lineTo(-3, r);
-  ctx.lineTo(-3, -r);
-  ctx.closePath();
-  ctx.fill();
-
-  // Flesh gradient on flat side
-  const fleshGrad = ctx.createLinearGradient(0, 0, -r * 0.35, 0);
-  fleshGrad.addColorStop(0, 'rgba(255,236,210,0.7)');
-  fleshGrad.addColorStop(1, 'rgba(255,236,210,0)');
-  ctx.fillStyle = fleshGrad;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.92, -Math.PI / 2, Math.PI / 2);
-  ctx.lineTo(0, r);
-  ctx.lineTo(0, -r);
-  ctx.closePath();
-  ctx.fill();
-
-  // Seed — small dark teardrop in the center
-  ctx.save();
-  ctx.fillStyle = '#4e2a04';
-  ctx.beginPath();
-  ctx.ellipse(r * 0.2, 0, r * 0.08, r * 0.16, 0.3, 0, Math.PI * 2);
-  ctx.fill();
-  // Seed highlight
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(r * 0.18, -r * 0.04, r * 0.03, r * 0.06, 0.3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // Specular highlight on skin
-  const specGrad = ctx.createRadialGradient(
-    r * 0.15, -r * 0.3, 0,
-    r * 0.15, -r * 0.3, r * 0.35
-  );
-  specGrad.addColorStop(0, 'rgba(255,255,255,0.5)');
-  specGrad.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = specGrad;
-  ctx.beginPath();
-  ctx.arc(r * 0.15, -r * 0.3, r * 0.35, 0, Math.PI * 2);
-  ctx.fill();
 }
 
 export class Phase3 {
@@ -180,7 +106,7 @@ export class Phase3 {
         x: this.boardLeft + binWidth * i,
         y: binTop,
         width: binWidth,
-        height: h - binTop - 10,
+        height: PLINKO_CONFIG.binHeight,
         score: this.binScores[i] || 1,
         count: 0,
         flash: 0,
@@ -191,7 +117,7 @@ export class Phase3 {
     const halvesCount = data.halvesCount || 0;
     this.toDrop = [];
     for (let i = 0; i < halvesCount; i++) {
-      this.toDrop.push(colors[i] || '#e74c3c');
+      this.toDrop.push(colors[i] || PLINKO_CONFIG.nodeColor);
     }
     this.dropTimer = 0.5;
   }
@@ -213,20 +139,16 @@ export class Phase3 {
     }
 
     for (const piece of this.pieces) {
-      if (piece.scored && piece.body.y > h + 100) continue; // off-screen, skip physics
+      if (piece.scored && piece.body.y > h + 100) continue;
       const b = piece.body;
       b.update(dt);
       piece.rotation += piece.rotSpeed * dt;
 
-      // Peg collisions (only above the bin line)
       if (!piece.scored) {
         for (const peg of this.pegs) {
           resolveCircleCollision(b, peg);
         }
-      }
 
-      // Side-wall containment (only while in the board zone)
-      if (!piece.scored) {
         if (b.x - b.radius < this.boardLeft) {
           b.x = this.boardLeft + b.radius;
           b.vx = Math.abs(b.vx) * 0.5;
@@ -237,7 +159,6 @@ export class Phase3 {
         }
       }
 
-      // ── Bin trigger zone (transparent — score but keep falling) ──
       const binTop = this.boardTop + this.boardHeight;
       if (!piece.scored && b.y >= binTop) {
         const relX = b.x - this.boardLeft;
@@ -255,11 +176,9 @@ export class Phase3 {
           text: '+' + pts,
           life: 1.0,
         });
-        // Do NOT stop the piece — let it fall through
       }
     }
 
-    // Prune pieces that have fallen well off the bottom
     this.pieces = this.pieces.filter(p => p.body.y < h + 200);
 
     for (const bin of this.bins) {
@@ -272,10 +191,8 @@ export class Phase3 {
     }
     this.scorePopups = this.scorePopups.filter(p => p.life > 0);
 
-    // Done when all dropped and all scored or off-screen
     if (this.toDrop.length === 0 && this.pieces.length > 0) {
-      const allScored = this.pieces.every(p => p.scored);
-      if (allScored) {
+      if (this.pieces.every(p => p.scored)) {
         this.settleTimer += dt;
         if (this.settleTimer > 1.5) return 'done';
       }
@@ -293,24 +210,14 @@ export class Phase3 {
     const w = canvas.width;
     const h = canvas.height;
 
-    // Background
-    const bg = ctx.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, '#070b14');
-    bg.addColorStop(0.4, '#0d1528');
-    bg.addColorStop(1, '#131d35');
-    ctx.fillStyle = bg;
+    // Solid dark background
+    ctx.fillStyle = BG;
     ctx.fillRect(0, 0, w, h);
 
-    // Board background
-    ctx.fillStyle = 'rgba(255,255,255,0.02)';
-    ctx.fillRect(this.boardLeft, this.boardTop, this.boardWidth, this.boardHeight);
-
-    // Board side walls
+    // ── Board walls — thin cyan wireframe ──
     ctx.save();
-    ctx.strokeStyle = 'rgba(0,229,255,0.15)';
-    ctx.shadowColor = PEG_GLOW_COLOR;
-    ctx.shadowBlur = 8;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0,229,255,0.12)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(this.boardLeft, this.boardTop);
     ctx.lineTo(this.boardLeft, this.boardTop + this.boardHeight);
@@ -319,120 +226,106 @@ export class Phase3 {
     ctx.stroke();
     ctx.restore();
 
-    // Pegs
+    // ── Pegs — small glowing white dots ──
     ctx.save();
     for (const peg of this.pegs) {
-      ctx.shadowColor = PEG_GLOW_COLOR;
-      ctx.shadowBlur = 12;
-
-      const glow = ctx.createRadialGradient(peg.x, peg.y, 0, peg.x, peg.y, peg.radius * 2.5);
-      glow.addColorStop(0, 'rgba(0,229,255,0.25)');
-      glow.addColorStop(1, 'rgba(0,229,255,0)');
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(peg.x, peg.y, peg.radius * 2.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      const pegGrad = ctx.createRadialGradient(
-        peg.x - 1.5, peg.y - 1.5, 0,
-        peg.x, peg.y, peg.radius
-      );
-      pegGrad.addColorStop(0, '#b2ebf2');
-      pegGrad.addColorStop(0.5, '#4dd0e1');
-      pegGrad.addColorStop(1, '#00838f');
-      ctx.fillStyle = pegGrad;
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = '#fff';
       ctx.beginPath();
       ctx.arc(peg.x, peg.y, peg.radius, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
 
-    // ── Bins — transparent trigger zones ──
+    // ── Bins — wireframe boxes with cyan borders ──
     const binWidth = this.boardWidth / BIN_COUNT;
     const binTop = this.boardTop + this.boardHeight;
     for (let i = 0; i < this.bins.length; i++) {
       const bin = this.bins[i];
       const bx = this.boardLeft + binWidth * i;
-      const glowColor = BIN_GLOW_COLORS[i] || '#546e7a';
+      const flashAlpha = bin.flash > 0 ? bin.flash : 0;
 
-      // Subtle transparent fill (no solid wall)
-      const flashBoost = bin.flash > 0 ? bin.flash * 0.4 : 0;
-      ctx.fillStyle = `rgba(255,255,255,${0.03 + flashBoost})`;
-      ctx.fillRect(bx + 1, binTop, binWidth - 2, 30);
+      // Semi-transparent fill
+      ctx.fillStyle = `rgba(0,229,255,${0.02 + flashAlpha * 0.08})`;
+      ctx.fillRect(bx + 1, binTop, binWidth - 2, bin.height);
 
-      // Glowing trigger line at the bin threshold
+      // Wireframe border
       ctx.save();
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = bin.flash > 0 ? 18 : 6;
-      ctx.strokeStyle = glowColor;
-      ctx.globalAlpha = 0.4 + (bin.flash > 0 ? bin.flash : 0);
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(bx + 1, binTop);
-      ctx.lineTo(bx + binWidth - 1, binTop);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.strokeStyle = `rgba(0,229,255,${0.25 + flashAlpha * 0.5})`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 1, binTop, binWidth - 2, bin.height);
       ctx.restore();
 
-      // Dividers
-      ctx.fillStyle = 'rgba(0,229,255,0.12)';
-      ctx.fillRect(bx, binTop, 1.5, 30);
+      // Multiplier label
+      drawText(ctx, 'x' + bin.score, bx + binWidth / 2, binTop + bin.height / 2 + 4,
+        `bold 12px ${FONT}`, `rgba(0,229,255,${0.5 + flashAlpha * 0.5})`);
 
-      // Score label
-      drawShadowedText(ctx, 'x' + bin.score, bx + binWidth / 2, binTop + 22,
-        `bold 14px ${FONT_MAIN}`, glowColor);
-
-      // Piece count
+      // Count
       if (bin.count > 0) {
-        ctx.save();
-        ctx.font = `12px ${FONT_MAIN}`;
-        ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText(bin.count.toString(), bx + binWidth / 2, binTop + 36);
-        ctx.restore();
+        drawText(ctx, bin.count.toString(), bx + binWidth / 2, binTop + bin.height - 4,
+          `10px ${FONT}`, 'rgba(255,255,255,0.3)');
       }
     }
 
-    // ── Pieces — proper apple-slice rendering ──
+    // ── Pieces — glowing cyan semi-circles ──
     for (const piece of this.pieces) {
       const b = piece.body;
-      if (b.y > h + 100) continue; // off-screen
+      if (b.y > h + 100) continue;
       ctx.save();
       ctx.translate(b.x, b.y);
       ctx.rotate(piece.rotation);
 
-      // Fade slightly once scored (falling away)
       if (piece.scored) {
-        const fadeProgress = Math.min(1, (b.y - (this.boardTop + this.boardHeight)) / 150);
+        const fadeProgress = Math.min(1, (b.y - binTop) / 150);
         ctx.globalAlpha = Math.max(0, 1 - fadeProgress * 0.7);
       }
 
-      drawAppleSlice(ctx, b.radius);
+      // Glowing semi-circle
+      ctx.shadowColor = piece.color;
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = piece.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.radius, -Math.PI / 2, Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+
+      // Flat edge
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(-1, -b.radius, 2, b.radius * 2);
+
+      // Core highlight
+      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = (piece.scored ? 0.1 : 0.2);
+      ctx.beginPath();
+      ctx.arc(b.radius * 0.2, 0, b.radius * 0.25, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.globalAlpha = 1;
       ctx.restore();
     }
 
-    // Score popups
+    // ── Score popups ──
     ctx.save();
     for (const p of this.scorePopups) {
       ctx.globalAlpha = p.life;
-      ctx.shadowColor = '#ffd740';
-      ctx.shadowBlur = 8;
-      drawShadowedText(ctx, p.text, p.x, p.y,
-        `bold 22px ${FONT_MAIN}`, '#ffd740');
+      drawText(ctx, p.text, p.x, p.y,
+        `bold 20px ${FONT}`, PLINKO_CONFIG.nodeColor);
     }
+    ctx.globalAlpha = 1;
     ctx.restore();
 
-    // Score HUD
-    drawShadowedText(ctx, 'Score: ' + this.score, w / 2, 45,
-      `bold 34px ${FONT_MAIN}`, '#fff');
+    // ── HUD ──
+    drawText(ctx, this.score.toString(), w / 2, 45,
+      `bold 34px ${FONT}`, '#fff');
 
-    // Remaining count
+    drawText(ctx, 'SCORE', w / 2, 64,
+      `11px ${FONT}`, 'rgba(255,255,255,0.3)');
+
     if (this.toDrop.length > 0) {
-      drawShadowedText(ctx, `Dropping: ${this.toDrop.length} remaining`, w / 2, 78,
-        `18px ${FONT_MAIN}`, 'rgba(255,255,255,0.6)');
+      drawText(ctx, `${this.toDrop.length} REMAINING`, w / 2, 82,
+        `11px ${FONT}`, 'rgba(0,229,255,0.4)');
     }
   }
 

@@ -4,7 +4,7 @@ import { Phase1 } from './phase1_gather.js';
 import { Phase2 } from './phase2_slice.js';
 import { Phase3 } from './phase3_plinko.js';
 
-const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+const FONT = '"SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace';
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -149,7 +149,7 @@ function loop(timestamp) {
 
   // Total score overlay
   ctx.save();
-  ctx.font = `bold 14px ${FONT_MAIN}`;
+  ctx.font = `bold 14px ${FONT}`;
   ctx.textAlign = 'right';
   ctx.shadowColor = 'rgba(0,0,0,0.6)';
   ctx.shadowBlur = 4;
@@ -162,7 +162,7 @@ function loop(timestamp) {
   // Phase label
   const phaseNames = { [PHASES.GATHER]: 'GATHER', [PHASES.SLICE]: 'SLICE', [PHASES.PLINKO]: 'PLINKO' };
   ctx.save();
-  ctx.font = `bold 12px ${FONT_MAIN}`;
+  ctx.font = `bold 12px ${FONT}`;
   ctx.textAlign = 'left';
   ctx.shadowColor = 'rgba(0,0,0,0.6)';
   ctx.shadowBlur = 4;
