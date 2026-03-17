@@ -4,6 +4,8 @@ import { Phase1 } from './phase1_gather.js';
 import { Phase2 } from './phase2_slice.js';
 import { Phase3 } from './phase3_plinko.js';
 
+const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
@@ -105,13 +107,12 @@ let lastTime = 0;
 function loop(timestamp) {
   requestAnimationFrame(loop);
 
-  const dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
   lastTime = timestamp;
 
   if (transitioning) {
-    transitionAlpha += dt * 2.5; // fade speed
+    transitionAlpha += dt * 2.5;
     if (transitionAlpha >= 1) {
-      // Switch phase at peak darkness
       startPhase(transitionTarget, transitionData);
       transitioning = false;
       transitionAlpha = 1;
@@ -121,7 +122,6 @@ function loop(timestamp) {
     if (transitionAlpha < 0) transitionAlpha = 0;
   }
 
-  // Update current phase
   if (phase && !transitioning) {
     const result = phase.update(dt);
     if (result === 'done') {
@@ -148,17 +148,27 @@ function loop(timestamp) {
   }
 
   // Total score overlay
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.font = '14px monospace';
+  ctx.save();
+  ctx.font = `bold 14px ${FONT_MAIN}`;
   ctx.textAlign = 'right';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
   ctx.fillText('Total: ' + totalScore, canvas.width - 15, 25);
-  ctx.textAlign = 'left';
+  ctx.restore();
 
   // Phase label
   const phaseNames = { [PHASES.GATHER]: 'GATHER', [PHASES.SLICE]: 'SLICE', [PHASES.PLINKO]: 'PLINKO' };
+  ctx.save();
+  ctx.font = `bold 12px ${FONT_MAIN}`;
+  ctx.textAlign = 'left';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 4;
   ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  ctx.font = '12px monospace';
   ctx.fillText(phaseNames[currentPhase], 15, 25);
+  ctx.restore();
 
   // Transition overlay
   if (transitionAlpha > 0) {

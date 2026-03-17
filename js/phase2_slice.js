@@ -8,7 +8,16 @@ const MAX_ON_SCREEN = 3;
 const LAUNCH_INTERVAL = 0.6;
 const BOMB_CHANCE = 0.15;
 const TRAIL_LIFETIME = 0.25;
-const FRUIT_COLORS = ['#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#9b59b6'];
+
+const FRUIT_TYPES = [
+  { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
+  { base: '#e67e22', mid: '#d35400', dark: '#a04000' },
+  { base: '#f1c40f', mid: '#d4ac0d', dark: '#9a7d0a' },
+  { base: '#2ecc71', mid: '#27ae60', dark: '#1e8449' },
+  { base: '#9b59b6', mid: '#8e44ad', dark: '#6c3483' },
+];
+
+const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
 class SliceFruit {
   constructor(x, y, vx, vy, isBomb) {
@@ -16,21 +25,173 @@ class SliceFruit {
       vx, vy, gravity: 600, restitution: 0.3,
     });
     this.isBomb = isBomb;
-    this.color = isBomb ? '#e74c3c' : FRUIT_COLORS[Math.floor(Math.random() * FRUIT_COLORS.length)];
+    if (isBomb) {
+      this.color = '#2c3e50';
+      this.colorBase = '#2c3e50';
+      this.colorMid = '#1a252f';
+      this.colorDark = '#0d1317';
+    } else {
+      const type = FRUIT_TYPES[Math.floor(Math.random() * FRUIT_TYPES.length)];
+      this.color = type.base;
+      this.colorBase = type.base;
+      this.colorMid = type.mid;
+      this.colorDark = type.dark;
+    }
     this.sliced = false;
     this.missed = false;
+    this.rotation = 0;
+    this.rotSpeed = (Math.random() - 0.5) * 4;
   }
 }
 
 class FruitHalf {
-  constructor(x, y, vx, vy, color, angle) {
+  constructor(x, y, vx, vy, color, colorMid, angle) {
     this.body = new Body(x, y, FRUIT_RADIUS * 0.7, {
       vx, vy, gravity: 700, restitution: 0.2,
     });
     this.color = color;
-    this.angle = angle; // which half: 0 or PI
+    this.colorMid = colorMid;
+    this.angle = angle;
     this.fadeTimer = 2.5;
   }
+}
+
+class JuiceParticle {
+  constructor(x, y, color) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 80 + Math.random() * 180;
+    this.x = x;
+    this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed - 100;
+    this.life = 1;
+    this.color = color;
+    this.radius = 2 + Math.random() * 4;
+  }
+}
+
+function drawVolumetricFruit(ctx, r, base, mid, dark) {
+  const grad = ctx.createRadialGradient(
+    -r * 0.3, -r * 0.3, r * 0.1,
+    0, 0, r
+  );
+  grad.addColorStop(0, '#fff');
+  grad.addColorStop(0.15, base);
+  grad.addColorStop(0.6, mid);
+  grad.addColorStop(1, dark);
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Specular highlight
+  const specGrad = ctx.createRadialGradient(
+    -r * 0.35, -r * 0.35, 0,
+    -r * 0.35, -r * 0.35, r * 0.45
+  );
+  specGrad.addColorStop(0, 'rgba(255,255,255,0.65)');
+  specGrad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = specGrad;
+  ctx.beginPath();
+  ctx.arc(-r * 0.35, -r * 0.35, r * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stem
+  ctx.save();
+  ctx.translate(0, -r + 1);
+  ctx.strokeStyle = '#5d4037';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(3, -7, 1, -12);
+  ctx.stroke();
+  ctx.fillStyle = '#4caf50';
+  ctx.beginPath();
+  ctx.ellipse(4, -8, 4.5, 2, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBomb(ctx, r, time) {
+  // Metallic radial gradient body
+  const grad = ctx.createRadialGradient(
+    -r * 0.25, -r * 0.25, r * 0.1,
+    0, 0, r
+  );
+  grad.addColorStop(0, '#5c6370');
+  grad.addColorStop(0.4, '#3a3f47');
+  grad.addColorStop(0.8, '#1e2228');
+  grad.addColorStop(1, '#0a0c0e');
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Metallic rim highlight
+  ctx.strokeStyle = 'rgba(150,160,180,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, r - 1, -Math.PI * 0.7, -Math.PI * 0.2);
+  ctx.stroke();
+
+  // Glowing red core
+  const coreGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.45);
+  const pulse = 0.4 + 0.3 * Math.sin(time / 100);
+  coreGrad.addColorStop(0, `rgba(255,60,30,${pulse})`);
+  coreGrad.addColorStop(1, 'rgba(255,0,0,0)');
+  ctx.fillStyle = coreGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Fuse
+  ctx.strokeStyle = '#8d6e63';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.quadraticCurveTo(6, -r - 8, 3, -r - 16);
+  ctx.stroke();
+
+  // Sparking fuse tip
+  ctx.save();
+  ctx.shadowColor = '#ffab00';
+  ctx.shadowBlur = 12;
+  const sparkPulse = 0.5 + 0.5 * Math.sin(time / 60);
+  ctx.fillStyle = `rgba(255,200,50,${sparkPulse})`;
+  ctx.beginPath();
+  ctx.arc(3, -r - 16, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // Secondary spark
+  ctx.fillStyle = `rgba(255,255,200,${sparkPulse * 0.8})`;
+  ctx.beginPath();
+  ctx.arc(3, -r - 16, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Skull icon — simple X marks
+  ctx.strokeStyle = `rgba(200,50,50,${0.5 + 0.2 * Math.sin(time / 150)})`;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(-7, -6); ctx.lineTo(7, 6);
+  ctx.moveTo(7, -6); ctx.lineTo(-7, 6);
+  ctx.stroke();
+}
+
+function drawShadowedText(ctx, text, x, y, font, fillColor) {
+  ctx.save();
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = fillColor;
+  ctx.fillText(text, x, y);
+  ctx.restore();
 }
 
 export class Phase2 {
@@ -41,6 +202,7 @@ export class Phase2 {
     this.fruits = [];
     this.halves = [];
     this.trail = [];
+    this.juiceParticles = [];
     this.isDragging = false;
     this.prevMouse = null;
     this.mouseX = 0;
@@ -55,10 +217,11 @@ export class Phase2 {
   enter(canvas, data) {
     this.totalToLaunch = data.harvested || 5;
     this.launched = 0;
-    this.launchTimer = 0.8; // initial delay
+    this.launchTimer = 0.8;
     this.fruits = [];
     this.halves = [];
     this.trail = [];
+    this.juiceParticles = [];
     this.isDragging = false;
     this.prevMouse = null;
     this.bombSliced = false;
@@ -79,13 +242,11 @@ export class Phase2 {
     this.mouseX = x;
     this.mouseY = y;
     if (this.isDragging && this.prevMouse) {
-      // Add trail segment
       this.trail.push({
         x1: this.prevMouse.x, y1: this.prevMouse.y,
         x2: x, y2: y,
         life: TRAIL_LIFETIME,
       });
-      // Check slice intersections
       this._checkSlices(this.prevMouse.x, this.prevMouse.y, x, y);
     }
     this.prevMouse = { x, y };
@@ -109,37 +270,43 @@ export class Phase2 {
         fruit.sliced = true;
         this.slicedCount++;
         this._splitFruit(fruit, x1, y1, x2, y2);
+        this._spawnJuice(fruit);
       }
     }
   }
 
   _splitFruit(fruit, x1, y1, x2, y2) {
     const b = fruit.body;
-    // Slice direction
     const sdx = x2 - x1;
     const sdy = y2 - y1;
     const len = Math.sqrt(sdx * sdx + sdy * sdy) || 1;
-    // Normal to slice direction
     const nx = -sdy / len;
     const ny = sdx / len;
 
     const splitSpeed = 120;
     const sliceAngle = Math.atan2(sdy, sdx);
 
-    // Two halves fly apart along the normal
     this.halves.push(new FruitHalf(
       b.x + nx * 4, b.y + ny * 4,
       b.vx + nx * splitSpeed, b.vy + ny * splitSpeed - 50,
-      fruit.color, sliceAngle,
+      fruit.color, fruit.colorMid, sliceAngle,
     ));
     this.halves.push(new FruitHalf(
       b.x - nx * 4, b.y - ny * 4,
       b.vx - nx * splitSpeed, b.vy - ny * splitSpeed - 50,
-      fruit.color, sliceAngle + Math.PI,
+      fruit.color, fruit.colorMid, sliceAngle + Math.PI,
     ));
 
-    // Slice flash effect
     this.sliceFlashes.push({ x: b.x, y: b.y, life: 0.3 });
+  }
+
+  _spawnJuice(fruit) {
+    const count = 5 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < count; i++) {
+      this.juiceParticles.push(
+        new JuiceParticle(fruit.body.x, fruit.body.y, fruit.color)
+      );
+    }
   }
 
   _activeFruitCount() {
@@ -150,43 +317,47 @@ export class Phase2 {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    // Launch fruits
     this.launchTimer -= dt;
     if (this.launchTimer <= 0 && this.launched < this.totalToLaunch && this._activeFruitCount() < MAX_ON_SCREEN) {
       this._launchFruit(w, h);
       this.launchTimer = LAUNCH_INTERVAL;
     }
 
-    // Update fruits
     for (const fruit of this.fruits) {
       if (fruit.sliced || fruit.missed) continue;
       fruit.body.update(dt);
+      fruit.rotation += fruit.rotSpeed * dt;
       if (fruit.body.y > h + 80) {
         fruit.missed = true;
       }
     }
 
-    // Update halves
     for (const half of this.halves) {
       half.body.update(dt);
       half.fadeTimer -= dt;
     }
     this.halves = this.halves.filter(h => h.fadeTimer > 0 && !h.body.isOffScreen(w, this.canvas.height));
 
-    // Update trail
     for (const t of this.trail) {
       t.life -= dt;
     }
     this.trail = this.trail.filter(t => t.life > 0);
 
-    // Update effects
+    // Juice particles
+    for (const p of this.juiceParticles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 500 * dt; // gravity
+      p.life -= dt * 1.8;
+    }
+    this.juiceParticles = this.juiceParticles.filter(p => p.life > 0);
+
     for (const f of this.sliceFlashes) {
       f.life -= dt;
     }
     this.sliceFlashes = this.sliceFlashes.filter(f => f.life > 0);
     if (this.bombFlash > 0) this.bombFlash -= dt;
 
-    // Check done
     if (this.bombSliced && this.bombFlash <= 0) return 'done';
     const allLaunched = this.launched >= this.totalToLaunch;
     const allResolved = this.fruits.every(f => f.sliced || f.missed);
@@ -207,40 +378,95 @@ export class Phase2 {
   draw(ctx, canvas) {
     const w = canvas.width;
     const h = canvas.height;
+    const now = Date.now();
 
-    // Background
+    // Background — deep midnight gradient
     const bg = ctx.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, '#1a1a2e');
-    bg.addColorStop(1, '#16213e');
+    bg.addColorStop(0, '#0b0e17');
+    bg.addColorStop(0.5, '#101828');
+    bg.addColorStop(1, '#162038');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
     // Bomb flash overlay
     if (this.bombFlash > 0) {
-      ctx.fillStyle = `rgba(255, 50, 50, ${this.bombFlash})`;
+      ctx.fillStyle = `rgba(255, 40, 30, ${this.bombFlash * 0.6})`;
       ctx.fillRect(0, 0, w, h);
     }
 
-    // Slice trail
-    for (const t of this.trail) {
-      const alpha = t.life / TRAIL_LIFETIME;
-      ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.8})`;
-      ctx.lineWidth = 3 + alpha * 4;
+    // --- Blade trail ---
+    // Build a tapered, glowing polygon from recent trail segments
+    if (this.trail.length > 0) {
+      ctx.save();
+      ctx.shadowColor = '#00e5ff';
+      ctx.shadowBlur = 18;
       ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(t.x1, t.y1);
-      ctx.lineTo(t.x2, t.y2);
-      ctx.stroke();
+      ctx.lineJoin = 'round';
+
+      for (const t of this.trail) {
+        const alpha = t.life / TRAIL_LIFETIME;
+        // Thick at head, taper to thin
+        const thickness = alpha * 8 + 2;
+
+        // Compute perpendicular offset for tapering polygon
+        const dx = t.x2 - t.x1;
+        const dy = t.y2 - t.y1;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+
+        const headW = thickness;
+        const tailW = thickness * 0.15;
+
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillStyle = `rgba(200,250,255,${alpha * 0.85})`;
+        ctx.beginPath();
+        ctx.moveTo(t.x1 + nx * tailW, t.y1 + ny * tailW);
+        ctx.lineTo(t.x2 + nx * headW, t.y2 + ny * headW);
+        ctx.lineTo(t.x2 - nx * headW, t.y2 - ny * headW);
+        ctx.lineTo(t.x1 - nx * tailW, t.y1 - ny * tailW);
+        ctx.closePath();
+        ctx.fill();
+
+        // Inner bright core
+        ctx.globalAlpha = alpha * 0.7;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(t.x1, t.y1);
+        ctx.lineTo(t.x2, t.y2);
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     // Slice flash effects
     for (const f of this.sliceFlashes) {
       const p = f.life / 0.3;
-      ctx.fillStyle = `rgba(255, 255, 200, ${p * 0.6})`;
+      ctx.save();
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = `rgba(255, 255, 220, ${p * 0.5})`;
       ctx.beginPath();
       ctx.arc(f.x, f.y, 40 * (1 - p) + 10, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
     }
+
+    // Juice particles
+    ctx.save();
+    for (const p of this.juiceParticles) {
+      ctx.globalAlpha = p.life * 0.9;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * Math.max(0.3, p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
 
     // Fruits
     for (const fruit of this.fruits) {
@@ -248,53 +474,17 @@ export class Phase2 {
       const b = fruit.body;
       ctx.save();
       ctx.translate(b.x, b.y);
+      ctx.rotate(fruit.rotation);
 
       if (fruit.isBomb) {
-        // Bomb body
-        ctx.fillStyle = '#2c3e50';
-        ctx.beginPath();
-        ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
-        ctx.fill();
-        // Fuse highlight
-        ctx.strokeStyle = '#e74c3c';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(0, -b.radius);
-        ctx.lineTo(4, -b.radius - 10);
-        ctx.stroke();
-        // Spark
-        ctx.fillStyle = `rgba(255, 200, 50, ${0.5 + 0.5 * Math.sin(Date.now() / 80)})`;
-        ctx.beginPath();
-        ctx.arc(4, -b.radius - 12, 4, 0, Math.PI * 2);
-        ctx.fill();
-        // X marks
-        ctx.strokeStyle = '#c0392b';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(-8, -8); ctx.lineTo(8, 8);
-        ctx.moveTo(8, -8); ctx.lineTo(-8, 8);
-        ctx.stroke();
+        drawBomb(ctx, b.radius, now);
       } else {
-        // Fruit shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.2)';
-        ctx.beginPath();
-        ctx.arc(2, 2, b.radius, 0, Math.PI * 2);
-        ctx.fill();
-        // Fruit body
-        ctx.fillStyle = fruit.color;
-        ctx.beginPath();
-        ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
-        ctx.fill();
-        // Highlight
-        ctx.fillStyle = 'rgba(255,255,255,0.3)';
-        ctx.beginPath();
-        ctx.arc(-b.radius * 0.3, -b.radius * 0.3, b.radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
+        drawVolumetricFruit(ctx, b.radius, fruit.colorBase, fruit.colorMid, fruit.colorDark);
       }
       ctx.restore();
     }
 
-    // Fruit halves
+    // Fruit halves — with gradient
     for (const half of this.halves) {
       const b = half.body;
       const alpha = Math.min(1, half.fadeTimer);
@@ -302,34 +492,30 @@ export class Phase2 {
       ctx.translate(b.x, b.y);
       ctx.rotate(half.angle);
       ctx.globalAlpha = alpha;
-      // Draw half circle
-      ctx.fillStyle = half.color;
+
+      // Half-circle with gradient
+      const hg = ctx.createRadialGradient(-b.radius * 0.2, 0, 0, 0, 0, b.radius);
+      hg.addColorStop(0, half.color);
+      hg.addColorStop(1, half.colorMid);
+      ctx.fillStyle = hg;
       ctx.beginPath();
       ctx.arc(0, 0, b.radius, -Math.PI / 2, Math.PI / 2);
       ctx.closePath();
       ctx.fill();
-      // Flat edge
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      ctx.fillRect(-1, -b.radius, 2, b.radius * 2);
+
+      // Flesh interior on flat edge
+      ctx.fillStyle = 'rgba(255,255,230,0.25)';
+      ctx.fillRect(-1, -b.radius, 3, b.radius * 2);
       ctx.globalAlpha = 1;
       ctx.restore();
     }
 
     // HUD
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = 3;
-    ctx.font = 'bold 28px monospace';
-    ctx.textAlign = 'center';
-    const hudText = `Sliced: ${this.slicedCount} / ${this.totalToLaunch}`;
-    ctx.strokeText(hudText, w / 2, 40);
-    ctx.fillText(hudText, w / 2, 40);
-    ctx.lineWidth = 1;
+    drawShadowedText(ctx, `Sliced: ${this.slicedCount} / ${this.totalToLaunch}`,
+      w / 2, 42, `bold 28px ${FONT_MAIN}`, '#fff');
   }
 
   getResult() {
-    // Count surviving halves (those from non-bomb slices)
-    // Each sliced fruit produced 2 halves
     return {
       slicedCount: this.slicedCount,
       halvesCount: this.slicedCount * 2,
