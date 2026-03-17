@@ -2,13 +2,20 @@
 
 import { Body, resolveCircleCollision } from './physics.js';
 
-const PEG_RADIUS = 6;
-const HALF_RADIUS = 10;
-const PEG_ROWS = 8;
-const PEG_COLS = 9;
-const BIN_COUNT = PEG_COLS + 1;
-const BIN_SCORES = [1, 3, 5, 10, 25, 10, 5, 3, 1, 1];
-const DROP_INTERVAL = 0.3;
+// ── Tuning knobs (designed for future upgrade-tree attachment) ──
+const PLINKO_CONFIG = {
+  pegRadius:    6,
+  halfRadius:   16,    // was 10 → +60 % for visual weight & peg interaction
+  pegRows:      8,
+  pegCols:      9,
+  dropInterval: 0.3,
+  binScores:    [1, 3, 5, 10, 25, 10, 5, 3, 1, 1],
+  // Board bounding box (fraction of viewport)
+  boardWidthPct:  0.55,  // was 0.8 → much tighter
+  boardHeightPct: 0.55,  // was 0.7 → shorter
+  boardTopPct:    0.12,  // push down slightly
+};
+const BIN_COUNT = PLINKO_CONFIG.pegCols + 1;
 
 const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
@@ -21,7 +28,7 @@ const BIN_GLOW_COLORS = [
 
 class PlinkoHalf {
   constructor(x, y, color) {
-    this.body = new Body(x, y, HALF_RADIUS, {
+    this.body = new Body(x, y, PLINKO_CONFIG.halfRadius, {
       vx: (Math.random() - 0.5) * 40,
       vy: 0,
       gravity: 500,
@@ -77,28 +84,28 @@ export class Phase3 {
     const w = canvas.width;
     const h = canvas.height;
 
-    this.boardWidth = w * 0.8;
+    this.boardWidth = w * PLINKO_CONFIG.boardWidthPct;
     this.boardLeft = (w - this.boardWidth) / 2;
-    this.boardTop = h * 0.1;
-    this.boardHeight = h * 0.7;
+    this.boardTop = h * PLINKO_CONFIG.boardTopPct;
+    this.boardHeight = h * PLINKO_CONFIG.boardHeightPct;
 
-    const rowSpacing = this.boardHeight / (PEG_ROWS + 1);
-    const colSpacing = this.boardWidth / PEG_COLS;
+    const rowSpacing = this.boardHeight / (PLINKO_CONFIG.pegRows + 1);
+    const colSpacing = this.boardWidth / PLINKO_CONFIG.pegCols;
 
-    for (let row = 0; row < PEG_ROWS; row++) {
+    for (let row = 0; row < PLINKO_CONFIG.pegRows; row++) {
       const y = this.boardTop + rowSpacing * (row + 1);
       const offset = (row % 2 === 0) ? 0 : colSpacing / 2;
-      const cols = (row % 2 === 0) ? PEG_COLS : PEG_COLS - 1;
+      const cols = (row % 2 === 0) ? PLINKO_CONFIG.pegCols : PLINKO_CONFIG.pegCols - 1;
       for (let col = 0; col < cols; col++) {
         const x = this.boardLeft + colSpacing / 2 + col * colSpacing + offset;
-        this.pegs.push(new Body(x, y, PEG_RADIUS, {
+        this.pegs.push(new Body(x, y, PLINKO_CONFIG.pegRadius, {
           isStatic: true,
           restitution: 0.6,
         }));
       }
     }
 
-    this.binScores = BIN_SCORES.slice(0, BIN_COUNT);
+    this.binScores = PLINKO_CONFIG.binScores.slice(0, BIN_COUNT);
     this.bins = [];
     const binWidth = this.boardWidth / BIN_COUNT;
     const binTop = this.boardTop + this.boardHeight;
@@ -118,7 +125,7 @@ export class Phase3 {
     const halvesCount = data.halvesCount || 0;
     this.toDrop = [];
     for (let i = 0; i < halvesCount; i++) {
-      this.toDrop.push(colors[i] || '#e67e22');
+      this.toDrop.push(colors[i] || '#e74c3c');
     }
     this.dropTimer = 0.5;
   }
@@ -136,7 +143,7 @@ export class Phase3 {
       const color = this.toDrop.shift();
       const dropX = w / 2 + (Math.random() - 0.5) * 60;
       this.pieces.push(new PlinkoHalf(dropX, this.boardTop - 20, color));
-      this.dropTimer = DROP_INTERVAL;
+      this.dropTimer = PLINKO_CONFIG.dropInterval;
     }
 
     for (const piece of this.pieces) {

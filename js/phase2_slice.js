@@ -2,27 +2,31 @@
 
 import { Body, lineIntersectsCircle } from './physics.js';
 
-const FRUIT_RADIUS = 24;
-const BOMB_RADIUS = 26;
-const MAX_ON_SCREEN = 3;
-const LAUNCH_INTERVAL = 0.6;
-const BOMB_CHANCE = 0.15;
-const TRAIL_LIFETIME = 0.25;
-
-const FRUIT_TYPES = [
-  { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
-  { base: '#e67e22', mid: '#d35400', dark: '#a04000' },
-  { base: '#f1c40f', mid: '#d4ac0d', dark: '#9a7d0a' },
-  { base: '#2ecc71', mid: '#27ae60', dark: '#1e8449' },
-  { base: '#9b59b6', mid: '#8e44ad', dark: '#6c3483' },
-];
+// ── Tuning knobs (designed for future upgrade-tree attachment) ──
+const SLICE_CONFIG = {
+  appleRadius:    24,
+  bombRadius:     26,
+  maxOnScreen:    3,
+  launchInterval: 0.6,
+  bombChance:     0.15,
+  trailLifetime:  0.25,
+  // Launch physics
+  launchVyMin:    -850,   // stronger upward kick
+  launchVyRange:  -300,   // additional random upward
+  launchVxRange:  150,    // horizontal spread
+  // In-flight physics
+  fruitGravity:   420,    // lower gravity → more hang time
+  halfGravity:    550,
+  // Apple color (red only)
+  apple: { base: '#e74c3c', mid: '#c0392b', dark: '#922b21' },
+};
 
 const FONT_MAIN = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
 class SliceFruit {
   constructor(x, y, vx, vy, isBomb) {
-    this.body = new Body(x, y, isBomb ? BOMB_RADIUS : FRUIT_RADIUS, {
-      vx, vy, gravity: 600, restitution: 0.3,
+    this.body = new Body(x, y, isBomb ? SLICE_CONFIG.bombRadius : SLICE_CONFIG.appleRadius, {
+      vx, vy, gravity: SLICE_CONFIG.fruitGravity, restitution: 0.3,
     });
     this.isBomb = isBomb;
     if (isBomb) {
@@ -31,11 +35,10 @@ class SliceFruit {
       this.colorMid = '#1a252f';
       this.colorDark = '#0d1317';
     } else {
-      const type = FRUIT_TYPES[Math.floor(Math.random() * FRUIT_TYPES.length)];
-      this.color = type.base;
-      this.colorBase = type.base;
-      this.colorMid = type.mid;
-      this.colorDark = type.dark;
+      this.color = SLICE_CONFIG.apple.base;
+      this.colorBase = SLICE_CONFIG.apple.base;
+      this.colorMid = SLICE_CONFIG.apple.mid;
+      this.colorDark = SLICE_CONFIG.apple.dark;
     }
     this.sliced = false;
     this.missed = false;
@@ -46,8 +49,8 @@ class SliceFruit {
 
 class FruitHalf {
   constructor(x, y, vx, vy, color, colorMid, angle) {
-    this.body = new Body(x, y, FRUIT_RADIUS * 0.7, {
-      vx, vy, gravity: 700, restitution: 0.2,
+    this.body = new Body(x, y, SLICE_CONFIG.appleRadius * 0.7, {
+      vx, vy, gravity: SLICE_CONFIG.halfGravity, restitution: 0.2,
     });
     this.color = color;
     this.colorMid = colorMid;
@@ -245,7 +248,7 @@ export class Phase2 {
       this.trail.push({
         x1: this.prevMouse.x, y1: this.prevMouse.y,
         x2: x, y2: y,
-        life: TRAIL_LIFETIME,
+        life: SLICE_CONFIG.trailLifetime,
       });
       this._checkSlices(this.prevMouse.x, this.prevMouse.y, x, y);
     }
@@ -318,9 +321,9 @@ export class Phase2 {
     const h = this.canvas.height;
 
     this.launchTimer -= dt;
-    if (this.launchTimer <= 0 && this.launched < this.totalToLaunch && this._activeFruitCount() < MAX_ON_SCREEN) {
+    if (this.launchTimer <= 0 && this.launched < this.totalToLaunch && this._activeFruitCount() < SLICE_CONFIG.maxOnScreen) {
       this._launchFruit(w, h);
-      this.launchTimer = LAUNCH_INTERVAL;
+      this.launchTimer = SLICE_CONFIG.launchInterval;
     }
 
     for (const fruit of this.fruits) {
@@ -367,10 +370,10 @@ export class Phase2 {
   }
 
   _launchFruit(w, h) {
-    const isBomb = Math.random() < BOMB_CHANCE;
+    const isBomb = Math.random() < SLICE_CONFIG.bombChance;
     const x = w * 0.2 + Math.random() * w * 0.6;
-    const vx = (Math.random() - 0.5) * 150;
-    const vy = -550 - Math.random() * 200;
+    const vx = (Math.random() - 0.5) * SLICE_CONFIG.launchVxRange;
+    const vy = SLICE_CONFIG.launchVyMin + Math.random() * SLICE_CONFIG.launchVyRange;
     this.fruits.push(new SliceFruit(x, h + 40, vx, vy, isBomb));
     this.launched++;
   }
@@ -404,7 +407,7 @@ export class Phase2 {
       ctx.lineJoin = 'round';
 
       for (const t of this.trail) {
-        const alpha = t.life / TRAIL_LIFETIME;
+        const alpha = t.life / SLICE_CONFIG.trailLifetime;
         // Thick at head, taper to thin
         const thickness = alpha * 8 + 2;
 
